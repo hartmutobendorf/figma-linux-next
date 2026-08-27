@@ -1,0 +1,46 @@
+diff --git a/dist/targets/linux/snap/snapCommand.js b/dist/targets/linux/snap/snapCommand.js
+index c99f5f528136bef4cfd5c6acfad1dcb3604ca2c5..5e1737e30c3c2c66675d547cb721fd80eeb1359d 100644
+--- a/dist/targets/linux/snap/snapCommand.js
++++ b/dist/targets/linux/snap/snapCommand.js
+@@ -7,6 +7,33 @@ import { buildLauncherScript, shellQuote } from "../launcherScript.js";
+ // See: https://documentation.ubuntu.com/snapcraft/stable/reference/snapcraft-yaml/#apps.%3Capp-name%3E.command
+ // Re-exported for backwards compatibility with existing imports/tests.
+ export { shellQuote };
++// --- figma-linux-next local patch (bun patch, see patches/app-builder-lib.patch) ---
++// Chromium's own internal sandbox setup (the zygote fork, spawned natively before Electron
++// ever runs our app's JS) needs a user namespace, which under strict snap confinement requires
++// the `browser-support` interface (`allow-sandbox: true`) to be connected. Without it the app
++// aborts with a native "Check failed: ... Permission denied (13)" in
++// sandbox/linux/services/credentials.cc and a core dump — there is no JS-level way to intercept
++// this (it happens before Node's main script runs), so the check has to live in this launcher
++// script, which is the last thing that runs before the real Electron binary is exec'd.
++// `browser-support` + `allow-sandbox: true` forces `auto-connect: no` (Canonical policy) for any
++// non-Store-reviewed install, so every sideloaded `.snap` starts disconnected until the user
++// runs `snap connect` by hand.
++function buildBrowserSupportPreamble() {
++    return `if [ -n "$SNAP" ] && command -v snapctl >/dev/null 2>&1; then
++  if snapctl is-connected browser-support 2>/dev/null; then
++    snapctl set-health okay 2>/dev/null || true
++  else
++    echo "" >&2
++    echo "figma-linux-next needs the browser-support interface connected to run Chromium's internal sandbox under strict snap confinement." >&2
++    echo "" >&2
++    echo "  Run:  sudo snap connect $SNAP_NAME:browser-support" >&2
++    echo "" >&2
++    echo "Then relaunch the app." >&2
++    snapctl set-health blocked "Run: sudo snap connect $SNAP_NAME:browser-support" 2>/dev/null || true
++    exit 1
++  fi
++fi`;
++}
+ /**
+  * Builds the contents of the launcher script that execs `$SNAP/app/<execName>` with the given args.
+  * `$@` is forwarded so launch-time arguments still reach the app. The executable name is validated
+@@ -16,6 +43,6 @@ export { shellQuote };
+ export function buildSnapCommandLauncherScript(opts) {
+     const { execName, args } = opts;
+     validateShellEmbeddable(execName, "executableName");
+-    return buildLauncherScript({ command: [`"$SNAP/app/${execName}"`], args });
++    return buildLauncherScript({ command: [`"$SNAP/app/${execName}"`], args, preamble: buildBrowserSupportPreamble() });
+ }
+ //# sourceMappingURL=snapCommand.js.map

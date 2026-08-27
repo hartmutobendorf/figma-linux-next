@@ -70,5 +70,8 @@
     "Electron",
     "desktop",
     "app"
-  ]
+  ],
+  "patchedDependencies": {
+    "app-builder-lib@27.0.0-alpha.7": "patches/app-builder-lib@27.0.0-alpha.7.patch"
+  }
 }
