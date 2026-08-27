@@ -76,6 +76,25 @@
   "appImage": {
     "category": "Graphics"
   },
+  "snapcraft": {
+    "base": "core24",
+    "core24": {
+      "confinement": "strict",
+      "grade": "stable",
+      "summary": "Unofficial desktop app for Figma on Linux",
+      "artifactName": "${name}_${version}_${platform}_${arch}.${ext}",
+      "useLXD": true,
+      "plugs": [
+        "home",
+        "network",
+        "network-bind",
+        "unity7",
+        "audio-playback",
+        "pulseaudio",
+        { "browser-support": { "interface": "browser-support", "allow-sandbox": true } }
+      ]
+    }
+  },
   "linux": {
     "description": "Unofficial desktop application for linux",
     "icon": "resources/icons",
@@ -109,6 +128,10 @@
       },
       {
         "target": "zip",
+        "arch": ["x64", "arm64"]
+      },
+      {
+        "target": "snap",
         "arch": ["x64", "arm64"]
       }
     ]

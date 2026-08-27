@@ -17,6 +17,7 @@
     "builder": "electron-builder --config=config/builder.json -l",
     "pack": "rm -rf build/installers && bun run build && chmod a+x ./resources/AppRun && bun run builder",
     "pack:pacman": "bun run build && electron-builder --config=config/builder.json -l pacman",
+    "pack:snap": "bun run build && electron-builder --config=config/builder.json -l snap",
     "package": "rm -rf build/installers && bun run build && electron-builder --config=config/builder.json -l",
     "local:install": "sudo rm -rf /opt/figma-linux-next && sudo mkdir -p /opt/figma-linux-next && sudo cp -rf ./build/installers/linux-unpacked/* /opt/figma-linux-next/",
     "test:unit": "bun test tests/unit/",
@@ -53,7 +54,7 @@
     "@types/node": "^26.0.1",
     "cross-env": "^10.1.0",
     "electron": "43.3.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "27.0.0-alpha.7",
     "lint-staged": "^17.0.8",
     "nodemon": "^3.1.14",
     "svelte": "^5.56.4",
@@ -62,9 +63,6 @@
     "typescript": "^6.0.3",
     "vite": "^8.1.0",
     "vite-plugin-electron": "^1.1.0"
-  },
-  "overrides": {
-    "hosted-git-info": "^7"
   },
   "keywords": [
     "Figma",

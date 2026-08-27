@@ -100,9 +100,68 @@ jobs:
           name: installer-pacman
           path: build/installers/figma-linux-next_*_linux_x64.pacman
 
+  # Build snap (core24, strict confinement) via LXD-isolated snapcraft.
+  # LXD is container-based (no nested virtualisation needed), unlike snapcraft's
+  # default Multipass, which GitHub-hosted runners cannot provide.
+  build-snap-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: canonical/setup-lxd@v1
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build app
+        run: bun run build
+
+      - name: Package (snap — x64)
+        run: bunx electron-builder --config=config/builder.json --publish never -l snap --x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-snap-x64
+          path: build/installers/figma-linux-next_*_linux_x64.snap
+
+  build-snap-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: canonical/setup-lxd@v1
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build app
+        run: bun run build
+
+      - name: Package (snap — arm64)
+        run: bunx electron-builder --config=config/builder.json --publish never -l snap --arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-snap-arm64
+          path: build/installers/figma-linux-next_*_linux_arm64.snap
+
   # Create GitHub Release with all artifacts
   release:
-    needs: [build-x64, build-arm64, build-pacman]
+    needs: [build-x64, build-arm64, build-pacman, build-snap-x64, build-snap-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write

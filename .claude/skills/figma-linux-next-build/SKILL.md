@@ -2,7 +2,7 @@
 name: figma-linux-next-build
 description: |
   Build, packaging, and release skill for the figma-linux-next project.
-  Use this skill when working on: creating releases, bumping versions, building packages (deb/rpm/pacman/AppImage/zip), CI/CD workflows (.github/workflows/), AUR packages, or any publishing/distribution task. Also use when asked to "build", "release", "package", "publish", or "ship" figma-linux-next.
+  Use this skill when working on: creating releases, bumping versions, building packages (deb/rpm/pacman/AppImage/zip/snap), CI/CD workflows (.github/workflows/), AUR packages, or any publishing/distribution task. Also use when asked to "build", "release", "package", "publish", or "ship" figma-linux-next.
 ---
 
 # figma-linux-next Build & Release Reference
@@ -13,6 +13,7 @@ description: |
 bun run build          # Vite build → dist/ (required before packaging)
 bun run pack           # Full release build: clean → build → electron-builder all targets
 bun run pack:pacman    # Pacman-only package
+bun run pack:snap      # Snap-only package (needs snapcraft + LXD/Multipass; see Package Targets)
 bun run builder        # electron-builder only (skips Vite build)
 bun run local:install  # Install to /opt/figma-linux-next for manual testing
 bun run cln            # Clean dist/
@@ -62,8 +63,66 @@ Configured in **`config/builder.json`**:
 | Pacman | x64 only | No arm64 variant for Arch repos |
 | AppImage | x64, arm64 | Uses `resources/AppRun` launcher |
 | ZIP | x64, arm64 | Portable archive, uploaded to GitHub Releases |
+| Snap | x64, arm64 | `snapcraft` key, `base: core24`, `confinement: strict`, `gnome` extension (implicit) + explicit `plugs` (`home`, `network`, `network-bind`, `unity7`, `audio-playback`, `pulseaudio`, `browser-support` w/ `allow-sandbox: true`). Needs `snapcraft` CLI + an isolated build env (`useLXD: true` set in config) |
 
 App ID: `app.borys.FigmaLinuxNext` — registers `.fig` file association and `figma://` protocol.
+
+**Snap builds are not free-standing.** Unlike deb/rpm/AppImage/zip (fpm or direct packing),
+the `snap` target shells out to a real `snapcraft` CLI, which needs an isolated build
+environment — LXD (container, no nested virt) or Multipass (VM). `config/builder.json` sets
+`snapcraft.core24.useLXD: true`, matching what `release.yml`'s `build-snap-*` jobs provision
+via `canonical/setup-lxd@v1`. Building locally requires `sudo snap install snapcraft --classic`
+plus a working LXD (`sudo snap install lxd && lxd init --minimal`). Without both, packaging
+fails fast with `snapcraft not found` / `spawn snapcraft ENOENT` — that failure mode is
+expected in any sandbox without snapd, not a config bug.
+
+**Runtime confinement (strict, not classic/`--no-sandbox` — not an option for this app).**
+`config/builder.json`'s `snapcraft.core24.plugs` sets an explicit list, which replaces
+electron-builder's defaults entirely (see `resolvePlugs()` in
+`app-builder-lib/dist/targets/linux/snap/core24.js`) — anything not listed there, and not
+supplied by the `gnome` extension itself (`desktop`, `desktop-legacy`, `gsettings`, `opengl`,
+`wayland`, `x11`), is silently absent from the built snap, with no build-time warning.
+Dropping `network` this way once shipped a snap that couldn't resolve DNS or open a socket.
+
+`browser-support` with `allow-sandbox: true` is required for Chromium's own internal sandbox
+(userns) to work under strict confinement — without it, `figma-linux-next` crashes with
+`AppArmor DENIED ... userns_create`. That attribute forces `auto-connect: no` snap-store-wide
+(Canonical policy, not our config), so **every sideloaded/local install needs a manual**
+`sudo snap connect figma-linux-next:browser-support` **after `snap install --dangerous`** —
+this is not fixable from `builder.json`; it only goes away once the snap is published through
+Snap Store review (which grants a store-side auto-connect exception for vetted publishers).
+
+Debug new denials on the install machine with `sudo snappy-debug` (tails
+`journalctl`/`syslog` and explains each `AppArmor`/`seccomp` line). Known-noise entries,
+safe to ignore:
+- `seccomp` denials for `sched_setaffinity` / `setpriority` — Chromium scheduling hints
+- AppArmor denials in a *different* snap's profile (e.g. `mattermost-desktop`, or
+  `rsyslogd` inside a `lxd-workshop.*` namespace) — unrelated process, not our app
+- `dbus_method_call` to `org.bluez` (`GetManagedObjects`) — Web Bluetooth probing; only
+  matters if a `bluez` plug/feature is ever added
+- `open` denials on `/etc/vulkan/icd.d/` and `/etc/vulkan/implicit_layer.d/` — no snapd
+  interface exposes this host path under strict confinement (the `opengl` interface only
+  covers `/usr/share/vulkan/icd.d/*nvidia*.json` via `hostfs`); Chromium/ANGLE falls back
+  to non-Vulkan GL rendering automatically, there is no fix available under strict
+- `posix_mqueue` `getattr` on `/` — Chromium crash-handler IPC probing, non-fatal
+
+Denials that ARE real bugs (fix by adding the plug to `snapcraft.core24.plugs`):
+- reads on `/etc/hosts`, `/etc/host.conf`, `/run/systemd/resolve/stub-resolv.conf`, or
+  `AF_INET`/`AF_INET6` socket `create` denials → missing `network` plug
+- `listen`/`accept4` seccomp denials, or the Figma MCP (`:3845`) / CDP (`:9222`) listeners
+  never coming up at all → missing `network-bind` plug. `network` only covers the client
+  role (connect out); a snap opening its own listening socket needs `network-bind` too —
+  unrelated to which port it's on, and loopback-only sockets need it just the same as a
+  public one. Any unconfined process on the host (e.g. `chrome-figma`/browser tooling) can
+  still dial in from outside the snap once the socket is bound — confinement gates what the
+  snap process can do, not who connects to a socket it already opened.
+- reads under the user's home directory outside `$SNAP_USER_DATA` (breaks opening `.fig`
+  files via a file picker) → missing `home` plug
+- audio denials → missing `audio-playback` / `pulseaudio` plugs
+
+Verify what's actually connected on the install machine with `snap connections
+figma-linux-next` — plugs with `Notes: manual` need the explicit `snap connect` above;
+everything else should show `-` (auto-connected).
 
 ---
 
@@ -136,7 +195,7 @@ CI runs unit tests on the PR. Once green — merge.
 git push origin vX.Y.Z
 ```
 ⚠️ **Only now** does `release.yml` trigger. At this point dev is already updated.
-- Builds all 9 packages (deb×2, rpm×2, AppImage×2, zip×2, pacman×1)
+- Builds all 11 packages (deb×2, rpm×2, AppImage×2, zip×2, pacman×1, snap×2)
 - Creates GitHub Release with release notes from CHANGELOG.md
 - Pushes updated PKGBUILD to AUR
 
@@ -162,7 +221,7 @@ git push origin vX.Y.Z
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `release.yml` | Tag `v*.*.*` pushed | Build all 9 packages, GitHub Release, AUR push |
+| `release.yml` | Tag `v*.*.*` pushed | Build all 11 packages, GitHub Release, AUR push |
 | `ci.yml` | Push/PR to `dev`/`staging` | Type check, lint, unit tests |
 | `remove_artefacts.yml` | Manual | Clean up old CI artifacts |
 
@@ -184,7 +243,13 @@ build-pacman (archlinux container)
   pacman: bun nodejs base-devel fakeroot libxcrypt-compat
   bunx electron-builder → .pacman (x64 only)
 
-release (needs all build-* jobs)
+build-snap-x64 (ubuntu-latest, canonical/setup-lxd@v1 + snapcraft)
+  bunx electron-builder → snap (x64, LXD-isolated build)
+
+build-snap-arm64 (ubuntu-24.04-arm, canonical/setup-lxd@v1 + snapcraft)
+  bunx electron-builder → snap (arm64, LXD-isolated build)
+
+release (needs all build-* and build-snap-* jobs)
   merge artifacts → SHA256SUMS → softprops/action-gh-release@v2
   release notes extracted from CHANGELOG.md
 
@@ -295,6 +360,8 @@ Common pitfalls:
 - archlinux container needs `libxcrypt-compat` for fpm/ruby
 - `makepkg --printsrcinfo` requires non-root user — use `useradd -m builder && su builder -c`
 - SSH `known_hosts` in archlinux container: use `/root/.ssh/` explicitly, set `GIT_SSH_COMMAND`
+- Snap CI jobs need `canonical/setup-lxd@v1` (before `snapcraft`) — Multipass needs nested
+  virtualisation GitHub-hosted runners don't have; LXD is container-based and works
 
 ---
 
@@ -311,6 +378,8 @@ build/installers/
 ├── figma-linux-next_<ver>_linux_arm64.AppImage
 ├── figma-linux-next_<ver>_linux_x64.zip
 ├── figma-linux-next_<ver>_linux_arm64.zip
+├── figma-linux-next_<ver>_linux_x64.snap
+├── figma-linux-next_<ver>_linux_arm64.snap
 └── SHA256SUMS
 ```
 
